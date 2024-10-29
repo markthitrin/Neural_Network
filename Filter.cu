@@ -1,37 +1,44 @@
 #pragma once
-#include "Header.h"
-#include "Layer.cpp"
-#include "LayerId.cpp"
+#include "Header.cuh"
+#include "Layer.cu"
+#include "LayerId.cu"
 
-#include "Func.h"
-
+#include "Func.cuh"
+#include "Variable.cuh"
 
 
 class Filter : public Layer {
 public:
-	Filter() { ; };
+	Filter() : Layer() { ; };
 
 	Filter(const std::size_t& size,
 		std::function<Matrix<double>(const Matrix<double>&)> _func = descale_func,
 		std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dfunc = ddescale_func) :
-		func(_func) , dfunc(_dfunc)
+		Layer(Layer::FILTER, size), func(_func) , dfunc(_dfunc)
 	{
-		Layer_type = Layer::FILTER;
 
-		value.reconstruct(size, 1);
 	}
 
-	Filter(const LayerId& set) {
-		Layer_type = Layer::FILTER;
-
-		value.reconstruct(set.Layer_size, 1);
-
+	Filter(const LayerId& set) : Layer(Layer::FILTER, set.Layer_size) {
 		func = descale_func;
 		dfunc = ddescale_func;
 
 		set_Layer(set.setting);
 	}
 
+	Filter(const Filter& copy) : Layer(copy) {
+		func = copy.func;
+		dfunc = copy.dfunc;
+	}
+
+	Filter(Filter&& other) : Layer(std::move(other)) {
+		func = other.func;
+		dfunc = other.dfunc;
+	}
+
+	~Filter() {
+
+	}
 
 
 	Matrix<double> feed() {																					// feedforward
@@ -39,21 +46,29 @@ public:
 		return func(value);																					// return output
 	}
 
-	std::vector<Matrix<double>> propagation(const std::vector<Matrix<double>>& gadient) {					// backpropagation
-		int start_pos = v.size() - gadient.size();															// rearrange the gadient In case givven gadient is shorter than memory
+	Matrix<double> predict() {
+		return func(value);
+	}
 
-		std::vector<Matrix<double>> result;																	// flow gadient
+	std::vector<Matrix<double>> propagation(const std::vector<Matrix<double>>& gradient) {					// backpropagation
+		int start_pos = v.size() - gradient.size();															// rearrange the gradient In case givven gradient is shorter than memory
 
-		for (int round = 0; round < gadient.size(); round++) {												// loop though every time step
-			result.push_back(Matrix<double>(value.get_row(), 1));
-			result.back() = dfunc(v[round + start_pos], gadient[round]);									// compute gadient
+		std::vector<Matrix<double>> result;																	// flow gradient
+
+		for (int round = 0; round < gradient.size(); round++) {												// loop though every time step
+			result.push_back(Matrix<double>(value.row, 1));
+			result.back() = dfunc(v[round + start_pos], gradient[round]);									// compute gradient
 		}
 		return result;
 	}
 
+	void mutate(const double& mutation_chance, const double& mutation_rate) {
+
+	}
 
 
-	void forgot(const std::size_t& number) {																	// delete old memory and shift the new memory
+
+	void fogot(const std::size_t& number) {																	// delete old memory and shift the new memory
 		int h = number;
 		if (number > v.size())
 			h = v.size();
@@ -65,8 +80,8 @@ public:
 		}
 	}
 
-	void forgot_all() {																						// delete all memory
-		forgot(v.size());
+	void fogot_all() {																						// delete all memory
+		fogot(v.size());
 	}
 
 
@@ -86,25 +101,43 @@ public:
 
 
 	void reconstruct(const std::size_t& size,
-	std::function<Matrix<double>(const Matrix<double>&)> _func,
-	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dfunc) {
-		forgot_all();
+	std::function<Matrix<double>(const Matrix<double>&)> _func = descale_func,
+	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dfunc = ddescale_func) {
+		fogot_all();
 		
-		value.reconstruct(size, 1);
+		Layer::reconstruct(Layer::FILTER, size);
 		
 		func = _func;
 		dfunc = _dfunc;
 	}
 
 	void reconstruct(const LayerId& set) {
-		forgot_all();
+		fogot_all();
 		
-		value.reconstruct(set.Layer_size, 1);
+		Layer::reconstruct(Layer::FILTER, set.Layer_size);
 
 		func = descale_func;
 		dfunc = ddescale_func;
 
 		set_Layer(set.setting);
+	}
+
+	void reconstruct(const Filter& copy) {
+		fogot_all();
+		
+		Layer::reconstruct(copy);
+
+		func = copy.func;
+		dfunc = copy.dfunc;
+	}
+
+	void reconstruct(Filter&& other) {
+		fogot_all();
+		
+		Layer::reconstruct(std::move(other));
+
+		func = other.func;
+		dfunc = other.dfunc;
 	}
 
 
@@ -145,10 +178,17 @@ public:
 
 	void print_value() {
 		std::cout << "---------Filter Layer----------\n";
-		for (int i = 0; i < value.get_row(); i++) {
-			std::cout << value[i][0] << "    \t";
-		}std::cout << std::endl;
+		value.print();
 	}
+
+	void save_as(std::ofstream& output_file) {
+
+	}
+
+	void load(std::ifstream& input_file) {
+
+	}
+
 private:
 	void set_Layer(const std::string& setting) {															// set layer using command
 		int size = setting.size();
