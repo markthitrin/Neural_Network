@@ -1,378 +1,466 @@
 #pragma once
 
 #include "Header.h"
-#include "Layer.cpp"
-#include "LayerId.cpp"
+#include "Layer.h"
+#include "LayerId.h"
+#include "Dense.h"
+#include "Function.h"
+#include "Variable.h"
 
-// import functions
-#include "Func.h"
 
+Dense::Dense() { Layer_type = Layer::DENSE; }
 
-class Dense : public Layer {
-public:
-	Dense() { Layer_type = Layer::DENSE; }
+Dense::Dense(const std::size_t& size) {
+	reconstruct(size);
+}
 
-	Dense(const std::size_t& size) {
-		Layer_type = Layer::DENSE;
+Dense::Dense(const std::size_t& size, const std::size_t& next, 
+	std::function<Matrix<double>(const Matrix<double>&)> _act_func,
+	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dact_func) {
+	reconstruct(size, next, act_func, dact_func);
+}
 
-		value.reconstruct(size, 1);
+Dense::Dense(const LayerId& set,const std::size_t& next) {
+	reconstruct(set, next);
+}
 
-		act_func = sigmoid_func;
-		dact_func = dsigmoid_func;
-	}
+Dense::Dense(const Dense& copy) {
+	reconstruct(copy);
+}
 
-	Dense(const std::size_t& size, const std::size_t& next, 
-		std::function<Matrix<double>(const Matrix<double>&)> _act_func = sigmoid_func,
-		std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dact_func = dsigmoid_func) {
-		Layer_type = Layer::DENSE;
-
-		value.reconstruct(size, 1);
-		weight.reconstruct(next, size);
-		weight_change.reconstruct(next, size);
-		bias.reconstruct(next, 1);
-		bias_change.reconstruct(next, 1);
-
-		act_func = _act_func;
-		dact_func = _dact_func;
-	}
-
-	Dense(const LayerId& set,const std::size_t& next) {
-		Layer_type = Layer::DENSE;
-
-		value.reconstruct(set.Layer_size, 1);
-		weight.reconstruct(next, set.Layer_size);
-		weight_change.reconstruct(next, set.Layer_size);
-		bias.reconstruct(next, 1);
-		bias_change.reconstruct(next, 1);
-
-		act_func = sigmoid_func;
-		dact_func = dsigmoid_func;
-
-		set_Layer(set.setting);	
-	}
+Dense::Dense(Dense&& move) {
+	reconstruct(std::move(move));
+}
 
 
 
-	Matrix<double> feed()  {																				// feedforward
-		if (!weight.is_constructed())	
-			throw "Undefined weight";
-
+Matrix<double> Dense::feed()  {
+	if (!weight.is_constructed())
+		throw std::runtime_error("Undefined weight");
+	
+	if (do_record || v.size() == 0)
 		v.push_back(value);
+	else
+		v[0] = value;
 
-		return act_func((weight * value) + bias);
+	return act_func((weight * value) + bias);
+}
+
+std::vector<Matrix<double>> Dense::propagation(const std::vector<Matrix<double>>& gadient)  {
+	if (gadient.size() > v.size())
+		throw std::runtime_error("invalid gadient size for  backpropagation");
+
+	std::vector<Matrix<double>> value_change;
+	std::vector<Matrix<double>> doutput;
+
+	const std::size_t start_pos = v.size() - gadient.size();
+
+	for (int round = 0; round < gadient.size(); round++) {
+		doutput.push_back(dact_func((weight * v[round + start_pos]) + bias, gadient[round]));
 	}
 
-	std::vector<Matrix<double>> propagation(const std::vector<Matrix<double>>& gadient)  {					// backpropagation
-		if (gadient.size() > v.size())
-			throw "invalid gadient size for  backpropagation";
-
-		std::vector<Matrix<double>> value_change;															// containing flowing gadient to be retunred
-		std::vector<Matrix<double>> doutput;																// containing derivative of output 
-
-		const std::size_t start_pos = v.size() - gadient.size();											// rearrange the gadient In case givven gadient is shorter than memory
-
-		for (int round = 0; round < gadient.size(); round++) {												// loop though each memory relate to givven gadient
-			doutput.push_back(dact_func((weight * v[round + start_pos]) + bias, gadient[round]));			// compute derivative of each time step output
-		}
-
-		for (int round = 0; round < gadient.size(); round++) {												// loop though each time step
-			for (int i = 0; i < weight.get_row(); i++) {													// loop though every weight
-				for (int j = 0; j < weight.get_column(); j++) {
-					weight_change[i][j] += doutput[round][i][0] * v[round + start_pos][j][0];// compute weight change
-				}
+	for (int round = 0; round < gadient.size(); round++) {
+		for (int i = 0; i < weight.get_row(); i++) {
+			for (int j = 0; j < weight.get_column(); j++) {
+				weight_change[i][j] += doutput[round][i][0] * v[round + start_pos][j][0] * learning_rate;
 			}
 		}
-
-		for (int round = 0; round < gadient.size(); round++) {												// loop though each time step
-			for (int i = 0; i < bias.get_row(); i++) {														// loop though each bias
-				bias_change[i][0] += doutput[round][i][0];													// compute bias change
-			}
-		}
-
-		for (int round = 0; round < gadient.size(); round++) {												// loop though each time step
-			value_change.push_back(Matrix<double>(value.get_row(), 1));										
-			set_Matrix(value_change.back(), 0);																
-
-			for (int i = 0; i < weight.get_row(); i++) {													// loop though each weight 
-				for (int j = 0; j < weight.get_column(); j++) {
-					value_change.back()[j][0] += doutput[round][i][0] * weight[i][j];						// compute flow gadient
-				}
-			}
-		}
-
-		return value_change;
 	}
+
+	for (int round = 0; round < gadient.size(); round++) {
+		for (int i = 0; i < bias.get_row(); i++) {
+			bias_change[i][0] += doutput[round][i][0] * learning_rate;
+		}
+	}
+
+	for (int round = 0; round < gadient.size(); round++) {
+		value_change.push_back(Matrix<double>(value.get_row(), 1));										
+		value_change.back() = 0;																
+
+		for (int i = 0; i < weight.get_row(); i++) {
+			for (int j = 0; j < weight.get_column(); j++) {
+				value_change.back()[j][0] += doutput[round][i][0] * weight[i][j];
+			}
+		}
+	}
+
+	return value_change;
+}
+
+
+
+void Dense::change_dependencies() {
+	++t;
+	switch (optimizer) {
+	case Layer::opt::SGD :
+		weight += weight_change;
+		bias += bias_change;
+		break;
+	case Layer::opt::MOMENTUM:
+		s_weight_change = s_weight_change * decay_rate + weight_change * (double(1) - decay_rate);
+		s_bias_change = s_bias_change * decay_rate + bias_change * (double(1) - decay_rate);
+
+		weight += s_weight_change;
+		bias += bias_change;
+		break;
+	case Layer::opt::ADAM:
+		s_weight_change = s_weight_change * decay_rate + weight_change * (double(1) - decay_rate);
+		s_bias_change = s_bias_change * decay_rate + bias_change * (double(1) - decay_rate);
+
+		ss_weight_change = ss_weight_change * decay_rate + mul_each(weight_change, weight_change) * (double(1) - decay_rate);
+		ss_bias_change = ss_bias_change * decay_rate + mul_each(bias_change, bias_change) * (double(1) - decay_rate);
+
+		weight += devide_each(s_weight_change * learning_rate, (pow(ss_weight_change, 0.5) + 0.000001));
+		bias += devide_each(s_bias_change * learning_rate, (pow(ss_weight_change, 0.5) + 0.000001));
+		break;
+	}
+}
+
+void Dense::set_change_dependencies(const double& value) {
+	weight_change = value;
+	bias_change = value;
+}
+
+void Dense::mul_change_dependencies(const double& value) {
+	weight_change *= value;
+	bias_change *= value;
+}
+
+void Dense::map_change_dependencies(const std::function<Matrix<double>(Matrix<double>)>& func) {
+	weight_change = func(weight_change);
+	bias_change = func(bias_change);
+}
+
+bool Dense::found_nan() {
+	return weight != weight || bias != bias;
+}
 	
 
 
-	void forgot(const std::size_t& number) {																	// delete old memory and shift the new memory
-		int h = number;
-		if (number > v.size())
-			h = v.size();
-		for (int i = 0; i < v.size() - h; i++) {
-			v[i] = v[i + h];
-		}
-		for (int i = 0; i < h; i++) {
-			v.pop_back();
-		}
+void Dense::reconstruct(const std::size_t& size) {
+	reconstruct(size, 0, sigmoid_func, dsigmoid_func);
+}
+
+void Dense::reconstruct(const std::size_t& size, const std::size_t& next,
+	std::function<Matrix<double>(const Matrix<double>&)> _act_func,
+	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dact_func) {
+	Layer::reconstruct(size);
+
+	Layer::Layer_type = Layer::type::DENSE;
+
+	weight.reconstruct(next, size);
+	bias.reconstruct(next, 1);
+
+	weight_change.reconstruct(next, size);
+	bias_change.reconstruct(next, 1);
+
+	s_weight_change.reconstruct(0, 0);
+	s_bias_change.reconstruct(0, 0);
+
+	ss_weight_change.reconstruct(0, 0);
+	ss_bias_change.reconstruct(0, 0);
+
+	act_func = _act_func;
+	dact_func = _dact_func;
+}
+
+void Dense::reconstruct(const LayerId& set,const size_t& next) {
+	reconstruct(set.Layer_size, next, sigmoid_func, dsigmoid_func);
+
+	set_Layer(set.setting);
+}
+
+void Dense::reconstruct(const Dense& copy) {
+	Layer::reconstruct(copy);
+
+	weight = copy.weight;
+	bias = copy.bias;
+
+	weight_change = copy.weight_change;
+	bias_change = copy.bias_change;
+
+	s_weight_change = copy.s_weight_change;
+	s_bias_change = copy.s_bias_change;
+
+	ss_weight_change = copy.ss_weight_change;
+	ss_bias_change = copy.ss_bias_change;
+
+	act_func = copy.act_func;
+	dact_func = copy.dact_func;
+}
+
+void Dense::reconstruct(Dense&& move) {
+	Layer::reconstruct(std::move(move));
+
+	weight = std::move(move.weight);
+	bias = std::move(move.bias);
+
+	weight_change = std::move(move.weight_change);
+	bias_change = std::move(move.bias_change);
+
+	s_weight_change = std::move(move.s_weight_change);
+	s_bias_change = std::move(move.s_bias_change);
+
+	ss_weight_change = std::move(move.ss_weight_change);
+	ss_bias_change = std::move(move.ss_bias_change);
+
+	act_func = move.act_func;
+	dact_func = move.dact_func;
+}
+
+
+
+void Dense::set_weight(const int& weight_type, const Matrix<double>& _weight) {
+	switch (weight_type) {
+	case WEIGHT :
+		weight = _weight;
+		break;
+	default:
+		throw std::runtime_error("Invalid weight_type to be set");
+		break;
 	}
+}
 
-	void forgot_all() {																						// delete all memory
-		forgot(v.size());
+void Dense::set_bias(const int& bias_type, const Matrix<double>& _bias) {
+	switch (bias_type) {
+	case BIAS :
+		bias = _bias;
+		break;
+	default:
+		throw std::runtime_error("Invalid bias_number to be set");
+		break;
 	}
+}
 
+void Dense::rand_weight(const double& min, const double& max) {
+	if (!weight.is_constructed())
+		throw std::runtime_error("cant set undefined weight value");
 
-
-	void change_dependencies() {
-		++t;
-		if (optimizer == SGD) {
-			weight = weight + weight_change * learning_rate;
-			bias = bias + bias_change * learning_rate;
-		}
-		else if (optimizer == MOMENTUM) {
-			set_up_Matrix(s_weight_change,weight);
-			set_up_Matrix(s_bias_change,bias);
-
-			s_weight_change = s_weight_change * decay_rate +  weight_change * (double(1) - decay_rate);
-			s_bias_change = s_bias_change * decay_rate + bias_change * (double(1) - decay_rate);
-
-			weight = weight + s_weight_change * learning_rate;
-			bias = bias + bias_change * learning_rate;
-		}
-		else if (optimizer == ADAM) {
-			set_up_Matrix(s_weight_change, weight);
-			set_up_Matrix(s_bias_change, bias);
-			set_up_Matrix(ss_weight_change, weight);
-			set_up_Matrix(ss_bias_change, bias);
-
-			s_weight_change = s_weight_change * decay_rate + weight_change * (double(1) - decay_rate);
-			s_bias_change = s_bias_change * decay_rate + bias_change * (double(1) - decay_rate);
-
-			ss_weight_change = ss_weight_change * decay_rate + mul_each(weight_change,weight_change) * (double(1) - decay_rate);
-			ss_bias_change = ss_bias_change * decay_rate + mul_each(bias_change,bias_change) * (double(1) - decay_rate);
-
-			weight = weight + devide_each(s_weight_change * learning_rate , (pow(ss_weight_change, 0.5) + 0.000001));
-			bias = bias + devide_each(s_bias_change * learning_rate , (pow(ss_weight_change, 0.5) + 0.000001));
-		}
-	}
-
-	void set_change_dependencies(const double& value) {														// set changing weight and chaing bias to specifc value
-		set_Matrix(weight_change, value);
-		set_Matrix(bias_change, value);
-	}
-
-	void mul_change_dependencies(const double& value) {														// multiply changing weight and ching bias with specific value
-		weight_change = weight_change * value;
-		bias_change = bias_change * value;
-	}
-
-	void set_learning(const double& value) {
-		learning_rate = value;
-	}
-	
-
-
-	void reconstruct(const std::size_t& size, const std::size_t& next,
-		std::function<Matrix<double>(const Matrix<double>&)> _act_func = sigmoid_func,
-		std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> _dact_func = dsigmoid_func) {
-		forgot_all();
-
-		value.reconstruct(size, 1);
-		weight.reconstruct(next, size);
-		bias.reconstruct(next, 1);
-
-		act_func = _act_func;
-		dact_func = _dact_func;
-	}
-
-	void reconstruct(const LayerId& set,const size_t& next) {
-		forgot_all();
-
-		value.reconstruct(set.Layer_size, 1);
-		weight.reconstruct(next, set.Layer_size);
-		bias.reconstruct(next, 1);
-
-		act_func = sigmoid_func;
-		dact_func = dsigmoid_func;
-
-		set_Layer(set.setting);
-	}
-
-
-
-	void rand_weight(const double& min, const double& max) {
-		if (!weight.is_constructed())
-			throw "cant set undefined weight value";
-
-		for (int i = 0; i < weight.get_row(); i++) {
-			for (int j = 0; j < weight.get_column(); j++) {
-				weight[i][j] = mapping(rand() % 10000, 0, 10000, min, max);
-			}
-		}
-	}
-
-	void rand_weight(std::pair<const double&, const double&> setting) {
-		if (!weight.is_constructed())
-			throw "cant set undefined weight value";
-
-		for (int i = 0; i < weight.get_row(); i++){
-			for (int j = 0; j < weight.get_column(); j++) {
-				weight[i][j] = mapping(rand() % 10000, 0, 10000, setting.first, setting.second);
-			}
+	for (int i = 0; i < weight.get_row(); i++) {
+		for (int j = 0; j < weight.get_column(); j++) {
+			weight[i][j] = mapping(rand() % 10000, 0, 10000, min, max);
 		}
 	}
+}
 
-	void rand_weight(std::function<double()> func) {
-		if (!weight.is_constructed())
-			throw "cant set undefined weight value";
+void Dense::rand_weight(std::pair<const double&, const double&> setting) {
+	if (!weight.is_constructed())
+		throw std::runtime_error("cant set undefined weight value");
 
-		for (int i = 0; i < weight.get_row(); i++) {
-			for (int j = 0; j < weight.get_column(); j++) {
-				weight[i][j] = func();
-			}
+	for (int i = 0; i < weight.get_row(); i++){
+		for (int j = 0; j < weight.get_column(); j++) {
+			weight[i][j] = mapping(rand() % 10000, 0, 10000, setting.first, setting.second);
 		}
 	}
+}
 
-	void rand_weight(std::function<double(std::size_t,std::size_t)> func,std::size_t next) {
-		if (!weight.is_constructed())
-			throw "cant set undefined weight value";
+void Dense::rand_weight(std::function<double()> func) {
+	if (!weight.is_constructed())
+		throw std::runtime_error("cant set undefined weight value");
 
-		for (int i = 0; i < weight.get_row(); i++) {
-			for (int j = 0; j < weight.get_column(); j++) {
-				weight[i][j] = func(value.get_row(), next);
-			}
+	for (int i = 0; i < weight.get_row(); i++) {
+		for (int j = 0; j < weight.get_column(); j++) {
+			weight[i][j] = func();
 		}
 	}
+}
 
-	void rand_bias(const double& min, const double& max) {
-		if (!bias.is_constructed())
-			throw "cant set undefined bias value";
+void Dense::rand_weight(std::function<double(std::size_t,std::size_t)> func,const std::size_t& next) {
+	if (!weight.is_constructed())
+		throw std::runtime_error("cant set undefined weight value");
 
-		for (int i = 0; i < bias.get_row(); i++) {
-			bias[i][0] = mapping(rand() % 10000, 0, 10000, min, max);
+	for (int i = 0; i < weight.get_row(); i++) {
+		for (int j = 0; j < weight.get_column(); j++) {
+			weight[i][j] = func(value.get_row(), next);
 		}
 	}
+}
 
-	void rand_bias(std::pair<const double&, const double&> setting) {
-		if (!bias.is_constructed())
-			throw "cant set undefined bias value";
+void Dense::rand_bias(const double& min, const double& max) {
+	if (!bias.is_constructed())
+		throw std::runtime_error("cant set undefined bias value");
 
-		for (int i = 0; i < bias.get_row(); i++) {
-			bias[i][0] = mapping(rand() % 10000, 0, 10000, setting.first, setting.second);
-		}
+	for (int i = 0; i < bias.get_row(); i++) {
+		bias[i][0] = mapping(rand() % 10000, 0, 10000, min, max);
 	}
+}
 
-	void rand_bias(std::function<double()> func) {
-		if (!bias.is_constructed())
-			throw "cant set undefined bias value";
+void Dense::rand_bias(std::pair<const double&, const double&> setting) {
+	if (!bias.is_constructed())
+		throw std::runtime_error("cant set undefined bias value");
 
-		for (int i = 0; i < bias.get_row(); i++) {
-			bias[i][0] = func();
-		}
+	for (int i = 0; i < bias.get_row(); i++) {
+		bias[i][0] = mapping(rand() % 10000, 0, 10000, setting.first, setting.second);
 	}
+}
 
-	void rand_bias(std::function<double(std::size_t,std::size_t)> func,std::size_t next) {
-		if (!bias.is_constructed())
-			throw "cant set undefined bias value";
+void Dense::rand_bias(std::function<double()> func) {
+	if (!bias.is_constructed())
+		throw std::runtime_error("cant set undefined bias value");
 
-		for (int i = 0; i < bias.get_row(); i++) {
-			bias[i][0] = func(value.get_row(), next);
-		}
+	for (int i = 0; i < bias.get_row(); i++) {
+		bias[i][0] = func();
 	}
+}
 
+void Dense::rand_bias(std::function<double(std::size_t,std::size_t)> func,const std::size_t& next) {
+	if (!bias.is_constructed())
+		throw std::runtime_error("cant set undefined bias value");
 
-
-	void print_weight() {
-		std::cout << "---------Dense Layer----------\n";
-		for (int i = 0; i < weight.get_row(); i++) {
-			for (int j = 0; j < weight.get_column(); j++) {
-				std::cout << weight[i][j] << "    \t";
-			}std::cout << std::endl;
-		}
+	for (int i = 0; i < bias.get_row(); i++) {
+		bias[i][0] = func(value.get_row(), next);
 	}
+}
 
-	void print_value() {
-		std::cout << "---------Dense Layer----------\n";
-		for (int i = 0; i < value.get_row(); i++) {
-			std::cout << value[i][0] << "    \t";
+
+
+void Dense::print_weight() {
+	std::cout << "---------Dense Layer----------\n";
+	for (int i = 0; i < weight.get_row(); i++) {
+		for (int j = 0; j < weight.get_column(); j++) {
+			std::cout << weight[i][j] << "    \t";
 		}std::cout << std::endl;
 	}
+}
 
-	void print_bias(){
-		std::cout << "---------Dense Layer---------\n";
-		for (int i = 0; i < bias.get_row(); i++) {
-			std::cout << bias[i][0] << "    \t";
-		}std::cout << std::endl;
-	}
+void Dense::print_value() {
+	std::cout << "---------Dense Layer----------\n";
+	for (int i = 0; i < value.get_row(); i++) {
+		std::cout << value[i][0] << "    \t";
+	}std::cout << std::endl;
+}
+
+void Dense::print_bias(){
+	std::cout << "---------Dense Layer---------\n";
+	for (int i = 0; i < bias.get_row(); i++) {
+		std::cout << bias[i][0] << "    \t";
+	}std::cout << std::endl;
+}
 
 
 
-	std::function<Matrix<double>(const Matrix<double>&)> get_act_func() {
-		return act_func;
-	}
+std::function<Matrix<double>(const Matrix<double>&)> Dense::get_act_func() {
+	return act_func;
+}
 
-	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> get_dact_func() {
-		return dact_func;
-	}
-	
-protected:
-private:
-	void set_Layer(const std::string& setting) {															// set the layer using command
-		int size = setting.size();
-		int i = 0;
-		while (i < size) {
-			std::string command = get_text(setting, i);
-			if (command == "act")
-				universal_set_func(act_func, setting, i);
-			else if (command == "dact")
-				universal_set_func(dact_func, setting, i);
-			else if (command == "learning_rate")
-				set_learning_rate(setting, i);
-			else if (command == "optimizer")
-				set_optimizer(setting, i);
-			else if (command == "")
-				;
-			else throw "command not found";
-		}
-	}
+std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> Dense::get_dact_func() {
+	return dact_func;
+}
 
-	void set_optimizer(const std::string& str, int& i) {
-		std::string _optimizer = get_text(str, i);
-		if (_optimizer == "SGD") {
-			optimizer = Layer::SGD;
-		}
-		else if (_optimizer == "MOMENTUM") {
-			optimizer = Layer::MOMENTUM;
-		}
-		else if (_optimizer == "ADAM") {
-			optimizer = Layer::ADAM;
-		}
-	}
-
-	void set_learning_rate(const std::string& str, int& i) {
-		double a = get_number(str, i);
-		learning_rate = a;
-	}
-
-	void set_up_Matrix(Matrix<double>& M,const Matrix<double>& B) {
+double Dense::get_max_abs_change_dependencies() {
+	double result = 0;
+	auto get_max_abs_matrix_value = [](const Matrix<double>& M) {
 		if (!M.is_constructed()) {
-			M.reconstruct(B.get_row(), B.get_column());
-			set_Matrix(M, 0);
+			return 0.0;
 		}
+		double result = 0;
+		for (int i = 0; i < M.get_row(); i++) {
+			for (int j = 0; j < M.get_column(); j++) {
+				result = std::max(result, std::abs(M[i][j]));
+			}
+		}
+		return result;
+	};
+
+	result = std::max(result, get_max_abs_matrix_value(weight_change));
+	result = std::max(result, get_max_abs_matrix_value(bias_change));
+
+	result = std::max(result, get_max_abs_matrix_value(s_weight_change));
+	result = std::max(result, get_max_abs_matrix_value(s_bias_change));
+
+	result = std::max(result, get_max_abs_matrix_value(ss_weight_change));
+	result = std::max(result, get_max_abs_matrix_value(ss_bias_change));
+
+	return result;
+}
+	
+
+
+void Dense::save_as(std::ofstream& output_file) {
+	weight.save_as(output_file);
+	bias.save_as(output_file);
+}
+
+void Dense::load(std::ifstream& input_file) {
+	weight.load(input_file);
+	bias.load(input_file);
+}
+
+
+
+void Dense::set_optimizer(const Layer::opt _opt) {
+	switch (optimizer) {
+	case Layer::opt::SGD: break;
+	case Layer::opt::MOMENTUM:
+		s_weight_change.reconstruct(0, 0);
+
+		s_bias_change.reconstruct(0, 0);
+		break;
+	case Layer::opt::ADAM:
+		s_weight_change.reconstruct(0, 0);
+		ss_weight_change.reconstruct(0, 0);
+
+		s_bias_change.reconstruct(0, 0);
+		ss_bias_change.reconstruct(0, 0);
+		break;
 	}
 
-	Matrix<double> s_weight_change;
-	Matrix<double> s_bias_change;
+	optimizer = _opt;
+	switch (optimizer) {
+	case Layer::opt::SGD: break;
+	case Layer::opt::MOMENTUM:
+		s_weight_change.reconstruct(weight_change.get_row(),weight_change.get_column());
+		s_weight_change *= 0;
 
-	Matrix<double> ss_weight_change;
-	Matrix<double> ss_bias_change;
+		s_bias_change.reconstruct(bias_change.get_row(),bias.get_column());
+		s_bias_change *= 0;
+		break;
+	case Layer::opt::ADAM:
+		s_weight_change.reconstruct(weight_change.get_row(),weight_change.get_column());
+		ss_weight_change.reconstruct(weight_change.get_row(),weight_change.get_column());
+		s_weight_change *= 0;
+		ss_weight_change *= 0;
 
-	Matrix<double> weight_change;																			// containing changing weight computed by backpropagation and will be added to weight															
-	Matrix<double> bias_change;																				// containing changing buas computed by backpropagation and will be added to bias \
+		s_bias_change.reconstruct(bias_change.get_row(), bias_change.get_column());
+		ss_bias_change.reconstruct(bias_change.get_row(), bias_change.get_column());
+		s_bias_change *= 0;
+		ss_bias_change *= 0;
+		break;
+	}
+}
 
-	Matrix<double> weight;																					// containing weight
-	Matrix<double> bias;																					// containing bias
 
-	std::function<Matrix<double>(const Matrix<double>&)> act_func;											// activate function
-	std::function<Matrix<double>(const Matrix<double>&, const Matrix<double>&)> dact_func;					// derivatives of activate function
-};
+
+void Dense::set_Layer(const std::string& setting) {
+	int size = setting.size();
+	int i = 0;
+	
+	auto set_optimizer_text = [&]() {
+		std::string _optimizer = get_text(setting, i);
+		if (_optimizer == "SGD")
+			set_optimizer(Layer::opt::SGD);
+		else if (_optimizer == "MOMENTUM")
+			set_optimizer(Layer::opt::MOMENTUM);
+		else if (_optimizer == "ADAM")
+			set_optimizer(Layer::opt::ADAM);
+	};
+	auto set_learning_rate_text = [&]() {
+		double a = get_number(setting, i);
+		set_learning_rate(a);
+	};
+
+	while (i < size) {
+		std::string command = get_text(setting, i);
+		if (command == "act")
+			universal_set_func(act_func, setting, i);
+		else if (command == "dact")
+			universal_set_func(dact_func, setting, i);
+		else if (command == "learning_rate")
+			set_learning_rate_text();
+		else if (command == "optimizer")
+			set_optimizer_text();
+		else if (command == "")
+			;
+		else throw std::runtime_error("command not found");
+	}
+}

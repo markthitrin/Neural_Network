@@ -7,3 +7,4 @@
 #include <ctime>
 #include <string>
 #include <thread>
+#include <bitset>
